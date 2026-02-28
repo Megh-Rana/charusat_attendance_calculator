@@ -22,3 +22,4 @@ Thumbs.db
 
 # HAR files (contain sensitive session data)
 *.har
+.vercel
