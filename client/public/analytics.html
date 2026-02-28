@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analytics — CHARUSAT Attendance Manager</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        *,
+        *::before,
+        *::after {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg: #0f1117;
+            --surface: #1a1d27;
+            --surface-2: #232733;
+            --text: #e4e6ed;
+            --text-secondary: #8b8fa3;
+            --border: #2a2e3b;
+            --accent: #6366f1;
+            --accent-light: #818cf8;
+            --green: #34d399;
+            --yellow: #fbbf24;
+            --orange: #fb923c;
+            --red: #f87171;
+            --blue: #60a5fa;
+            --purple: #a78bfa;
+            --cyan: #22d3ee;
+            --pink: #f472b6;
+            --radius: 12px;
+            --shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* ===== Auth Screen ===== */
+        .auth-screen {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 1rem;
+        }
+
+        .auth-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 2.5rem 2rem;
+            width: 100%;
+            max-width: 380px;
+            text-align: center;
+        }
+
+        .auth-card h1 {
+            font-size: 1.25rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .auth-card p {
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .auth-card input {
+            width: 100%;
+            padding: 0.65rem 0.85rem;
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-size: 0.9rem;
+            font-family: inherit;
+            margin-bottom: 1rem;
+            transition: border-color 0.2s;
+        }
+
+        .auth-card input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .auth-card button {
+            width: 100%;
+            padding: 0.65rem;
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .auth-card button:hover {
+            background: var(--accent-light);
+        }
+
+        .auth-card button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .auth-error {
+            background: rgba(248, 113, 113, 0.1);
+            color: var(--red);
+            padding: 0.5rem 0.75rem;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            margin-bottom: 1rem;
+            display: none;
+        }
+
+        /* ===== Dashboard ===== */
+        .dashboard {
+            display: none;
+            padding: 2rem 1.5rem;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .dash-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .dash-header h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+        }
+
+        .dash-header .refresh-btn {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            padding: 0.4rem 0.85rem;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            font-family: inherit;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .dash-header .refresh-btn:hover {
+            color: var(--text);
+            border-color: var(--accent);
+        }
+
+        /* Stat Cards */
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 1.25rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: var(--accent);
+        }
+
+        .stat-card.green::before {
+            background: var(--green);
+        }
+
+        .stat-card.blue::before {
+            background: var(--blue);
+        }
+
+        .stat-card.purple::before {
+            background: var(--purple);
+        }
+
+        .stat-card.orange::before {
+            background: var(--orange);
+        }
+
+        .stat-label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+
+        .stat-value {
+            font-size: 2.25rem;
+            font-weight: 700;
+            margin: 0.25rem 0 0;
+            line-height: 1.1;
+        }
+
+        .stat-card.green .stat-value {
+            color: var(--green);
+        }
+
+        .stat-card.blue .stat-value {
+            color: var(--blue);
+        }
+
+        .stat-card.purple .stat-value {
+            color: var(--purple);
+        }
+
+        .stat-card.orange .stat-value {
+            color: var(--orange);
+        }
+
+        /* Charts Grid */
+        .charts-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.25rem;
+            margin-bottom: 2rem;
+        }
+
+        .chart-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 1.25rem;
+        }
+
+        .chart-card h3 {
+            font-size: 0.9rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: var(--text);
+        }
+
+        .chart-wrapper {
+            position: relative;
+            height: 260px;
+        }
+
+        /* Recent Access Table */
+        .recent-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+        }
+
+        .recent-card h3 {
+            font-size: 0.9rem;
+            font-weight: 600;
+            padding: 1rem 1.25rem 0.75rem;
+        }
+
+        .recent-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.8rem;
+        }
+
+        .recent-table th {
+            text-align: left;
+            padding: 0.6rem 1.25rem;
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-secondary);
+            font-weight: 600;
+            background: var(--surface-2);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .recent-table td {
+            padding: 0.55rem 1.25rem;
+            border-bottom: 1px solid var(--border);
+            color: var(--text);
+        }
+
+        .recent-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .recent-table tr:hover td {
+            background: rgba(99, 102, 241, 0.04);
+        }
+
+        .roll-badge {
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            background: var(--surface-2);
+            padding: 0.15rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.78rem;
+            font-weight: 500;
+        }
+
+        .dept-tag {
+            display: inline-block;
+            padding: 0.1rem 0.45rem;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+
+        .year-tag {
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        .time-tag {
+            color: var(--text-secondary);
+            font-size: 0.75rem;
+        }
+
+        /* Loading */
+        .loading-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(15, 17, 23, 0.85);
+            z-index: 100;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .loading-overlay.active {
+            display: flex;
+        }
+
+        .loader {
+            width: 36px;
+            height: 36px;
+            border: 3px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .empty-state {
+            text-align: center;
+            color: var(--text-secondary);
+            padding: 3rem 1rem;
+            font-size: 0.9rem;
+        }
+
+        @media (max-width: 768px) {
+            .charts-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .stat-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            .dashboard {
+                padding: 1rem;
+            }
+
+            .stat-value {
+                font-size: 1.75rem;
+            }
+
+            .recent-table {
+                font-size: 0.75rem;
+            }
+
+            .recent-table th,
+            .recent-table td {
+                padding: 0.5rem 0.75rem;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .stat-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Auth Screen -->
+    <div class="auth-screen" id="authScreen">
+        <div class="auth-card">
+            <h1>📊 Analytics</h1>
+            <p>Enter your admin token to view analytics data</p>
+            <div class="auth-error" id="authError"></div>
+            <input type="password" id="tokenInput" placeholder="Admin token" autofocus>
+            <button id="authBtn" onclick="authenticate()">View Analytics</button>
+        </div>
+    </div>
+
+    <!-- Loading -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loader"></div>
+    </div>
+
+    <!-- Dashboard -->
+    <div class="dashboard" id="dashboard">
+        <div class="dash-header">
+            <h1>📊 Usage Analytics</h1>
+            <button class="refresh-btn" onclick="fetchData()">↻ Refresh</button>
+        </div>
+
+        <!-- Stat Cards -->
+        <div class="stat-grid" id="statGrid"></div>
+
+        <!-- Charts -->
+        <div class="charts-grid">
+            <div class="chart-card">
+                <h3>Department Breakdown</h3>
+                <div class="chart-wrapper"><canvas id="deptChart"></canvas></div>
+            </div>
+            <div class="chart-card">
+                <h3>Year of Study</h3>
+                <div class="chart-wrapper"><canvas id="yearChart"></canvas></div>
+            </div>
+            <div class="chart-card" style="grid-column: 1 / -1;">
+                <h3>Daily Usage (Last 7 Days)</h3>
+                <div class="chart-wrapper"><canvas id="dailyChart"></canvas></div>
+            </div>
+        </div>
+
+        <!-- Recent Accesses -->
+        <div class="recent-card">
+            <h3>Recent Accesses</h3>
+            <div id="recentTable"></div>
+        </div>
+    </div>
+
+    <script>
+        let token = '';
+        let deptChart, yearChart, dailyChart;
+
+        const DEPT_COLORS = {
+            CE: '#60a5fa', IT: '#34d399', CS: '#a78bfa', EC: '#fb923c',
+            EE: '#fbbf24', ME: '#f87171', CL: '#22d3ee', IC: '#f472b6',
+            BM: '#4ade80', AI: '#818cf8', DS: '#2dd4bf', CY: '#e879f9',
+            BT: '#a3e635', CV: '#facc15', MCA: '#38bdf8', MBA: '#c084fc',
+            ARC: '#fb7185', PHD: '#94a3b8',
+        };
+
+        const YEAR_COLORS = ['#6366f1', '#22d3ee', '#34d399', '#fbbf24', '#fb923c', '#f87171'];
+
+        document.getElementById('tokenInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') authenticate();
+        });
+
+        async function authenticate() {
+            token = document.getElementById('tokenInput').value.trim();
+            if (!token) return;
+
+            const errEl = document.getElementById('authError');
+            const btn = document.getElementById('authBtn');
+            errEl.style.display = 'none';
+            btn.disabled = true;
+            btn.textContent = 'Loading...';
+
+            try {
+                const res = await fetch(`/api/analytics?token=${encodeURIComponent(token)}`);
+                const json = await res.json();
+
+                if (!res.ok) {
+                    errEl.textContent = json.error || 'Authentication failed';
+                    errEl.style.display = 'block';
+                    btn.disabled = false;
+                    btn.textContent = 'View Analytics';
+                    return;
+                }
+
+                document.getElementById('authScreen').style.display = 'none';
+                document.getElementById('dashboard').style.display = 'block';
+                renderDashboard(json.data);
+            } catch (e) {
+                errEl.textContent = 'Network error. Try again.';
+                errEl.style.display = 'block';
+            }
+
+            btn.disabled = false;
+            btn.textContent = 'View Analytics';
+        }
+
+        async function fetchData() {
+            const overlay = document.getElementById('loadingOverlay');
+            overlay.classList.add('active');
+
+            try {
+                const res = await fetch(`/api/analytics?token=${encodeURIComponent(token)}`);
+                const json = await res.json();
+                if (json.success) renderDashboard(json.data);
+            } catch (e) {
+                console.error('Fetch error:', e);
+            }
+
+            overlay.classList.remove('active');
+        }
+
+        function renderDashboard(data) {
+            // Stat cards
+            const today = new Date().toISOString().split('T')[0];
+            const todayCount = data.daily?.[today] || 0;
+
+            document.getElementById('statGrid').innerHTML = `
+                <div class="stat-card blue">
+                    <div class="stat-label">Total Accesses</div>
+                    <div class="stat-value">${data.totalAccesses.toLocaleString()}</div>
+                </div>
+                <div class="stat-card green">
+                    <div class="stat-label">Unique Users</div>
+                    <div class="stat-value">${data.uniqueUsers.toLocaleString()}</div>
+                </div>
+                <div class="stat-card purple">
+                    <div class="stat-label">Departments</div>
+                    <div class="stat-value">${Object.keys(data.departments).length}</div>
+                </div>
+                <div class="stat-card orange">
+                    <div class="stat-label">Today</div>
+                    <div class="stat-value">${todayCount.toLocaleString()}</div>
+                </div>
+            `;
+
+            renderDeptChart(data.departments);
+            renderYearChart(data.years);
+            renderDailyChart(data.daily);
+            renderRecentTable(data.recent);
+        }
+
+        function renderDeptChart(departments) {
+            const labels = Object.keys(departments);
+            const values = Object.values(departments);
+            const colors = labels.map(d => DEPT_COLORS[d] || '#94a3b8');
+
+            if (deptChart) deptChart.destroy();
+
+            deptChart = new Chart(document.getElementById('deptChart'), {
+                type: 'doughnut',
+                data: {
+                    labels,
+                    datasets: [{
+                        data: values,
+                        backgroundColor: colors,
+                        borderColor: '#1a1d27',
+                        borderWidth: 2,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'right',
+                            labels: { color: '#8b8fa3', font: { size: 12 }, padding: 12 }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: (ctx) => {
+                                    const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
+                                    const pct = ((ctx.raw / total) * 100).toFixed(1);
+                                    return ` ${ctx.label}: ${ctx.raw} (${pct}%)`;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderYearChart(years) {
+            const labels = Object.keys(years);
+            const values = Object.values(years);
+            const colors = labels.map((_, i) => YEAR_COLORS[i % YEAR_COLORS.length]);
+
+            if (yearChart) yearChart.destroy();
+
+            yearChart = new Chart(document.getElementById('yearChart'), {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [{
+                        data: values,
+                        backgroundColor: colors.map(c => c + '99'),
+                        borderColor: colors,
+                        borderWidth: 1.5,
+                        borderRadius: 6,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: (ctx) => ` ${ctx.raw} accesses`
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            ticks: { color: '#8b8fa3', font: { size: 12 } },
+                            grid: { display: false },
+                            border: { color: '#2a2e3b' },
+                        },
+                        y: {
+                            beginAtZero: true,
+                            ticks: { color: '#8b8fa3', font: { size: 11 }, precision: 0 },
+                            grid: { color: '#2a2e3b33' },
+                            border: { display: false },
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderDailyChart(daily) {
+            const labels = Object.keys(daily).map(d => {
+                const date = new Date(d + 'T00:00:00');
+                return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+            });
+            const values = Object.values(daily);
+
+            if (dailyChart) dailyChart.destroy();
+
+            dailyChart = new Chart(document.getElementById('dailyChart'), {
+                type: 'line',
+                data: {
+                    labels,
+                    datasets: [{
+                        data: values,
+                        borderColor: '#6366f1',
+                        backgroundColor: 'rgba(99,102,241,0.1)',
+                        fill: true,
+                        tension: 0.4,
+                        pointRadius: 5,
+                        pointBackgroundColor: '#6366f1',
+                        pointBorderColor: '#1a1d27',
+                        pointBorderWidth: 2,
+                        borderWidth: 2.5,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: (ctx) => ` ${ctx.raw} accesses`
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            ticks: { color: '#8b8fa3', font: { size: 12 } },
+                            grid: { display: false },
+                            border: { color: '#2a2e3b' },
+                        },
+                        y: {
+                            beginAtZero: true,
+                            ticks: { color: '#8b8fa3', font: { size: 11 }, precision: 0 },
+                            grid: { color: '#2a2e3b33' },
+                            border: { display: false },
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderRecentTable(recent) {
+            const container = document.getElementById('recentTable');
+
+            if (!recent || recent.length === 0) {
+                container.innerHTML = '<div class="empty-state">No accesses recorded yet.</div>';
+                return;
+            }
+
+            const rows = recent.map(r => {
+                const color = DEPT_COLORS[r.department] || '#94a3b8';
+                const time = new Date(r.timestamp);
+                const timeStr = time.toLocaleString('en-IN', {
+                    day: 'numeric', month: 'short',
+                    hour: '2-digit', minute: '2-digit', hour12: true
+                });
+
+                return `<tr>
+                    <td><span class="roll-badge">${r.rollNumber}</span></td>
+                    <td><span class="dept-tag" style="background:${color}22;color:${color}">${r.department}</span></td>
+                    <td><span class="year-tag">${r.yearOfStudy > 0 ? 'Year ' + r.yearOfStudy : '—'}</span></td>
+                    <td><span class="time-tag">${timeStr}</span></td>
+                </tr>`;
+            }).join('');
+
+            container.innerHTML = `
+                <table class="recent-table">
+                    <thead>
+                        <tr>
+                            <th>Roll Number</th>
+                            <th>Department</th>
+                            <th>Year</th>
+                            <th>Time</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            `;
+        }
+    </script>
+</body>
+
+</html>

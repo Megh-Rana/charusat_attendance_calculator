@@ -1,6 +1,7 @@
 const axios = require("axios");
 const cheerio = require("cheerio");
 const https = require("https");
+const { logAccess } = require("./analytics");
 
 // ===== SCRAPER =====
 const agent = new https.Agent({ rejectUnauthorized: false });
@@ -203,6 +204,14 @@ module.exports = async (req, res) => {
         const session = await login(username, password);
         const raw = await fetchAttendance(session);
         const processed = processAttendance(raw);
+
+        // Fire-and-forget analytics logging (non-blocking)
+        try {
+            await logAccess(username);
+        } catch (e) {
+            // Silently ignore analytics errors — never affect user experience
+        }
+
         return res.status(200).json({ success: true, data: processed });
     } catch (err) {
         return res.status(500).json({ success: false, error: err.message });

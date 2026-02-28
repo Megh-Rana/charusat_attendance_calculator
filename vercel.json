@@ -11,12 +11,20 @@
         {
             "src": "api/attendance.js",
             "use": "@vercel/node"
+        },
+        {
+            "src": "api/analytics.js",
+            "use": "@vercel/node"
         }
     ],
     "routes": [
         {
             "src": "/api/attendance",
             "dest": "/api/attendance.js"
+        },
+        {
+            "src": "/api/analytics",
+            "dest": "/api/analytics.js"
         },
         {
             "handle": "filesystem"
