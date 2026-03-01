@@ -19,7 +19,7 @@ function LoginForm({ onLogin, loading, error }) {
 
                 {error && (
                     <div className="error-alert">
-                        <span className="error-icon">⚠️</span>
+                        <span className="error-icon"></span>
                         {error}
                     </div>
                 )}
@@ -66,7 +66,7 @@ function LoginForm({ onLogin, loading, error }) {
                 </form>
 
                 <p className="login-note">
-                    🔒 Credentials are sent directly to CHARUSAT's servers. Nothing is stored.
+                     Credentials are sent directly to CHARUSAT's servers. Nothing is stored.
                 </p>
             </div>
         </div>
