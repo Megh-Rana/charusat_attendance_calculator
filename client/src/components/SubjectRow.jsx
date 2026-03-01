@@ -1,4 +1,4 @@
-function SubjectRow({ subject }) {
+function SubjectRow({ subject, index }) {
     const { courseCode, courseName, classType, present, total, percentageNum, skippable, severity } = subject
 
     const displayName = courseName || courseCode

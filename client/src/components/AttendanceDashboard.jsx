@@ -27,7 +27,7 @@ function AttendanceDashboard({ data, onLogout }) {
                 </button>
             </div>
 
-            {/* Summary Cards — Lecture Gross is primary (matches CHARUSAT's displayed metric) */}
+            {/* Summary Cards */}
             <div className="summary-cards">
                 <div className={`summary-card primary severity-${lectSeverity}`}>
                     <div className="card-badge">Shown on eGov</div>
@@ -78,7 +78,7 @@ function AttendanceDashboard({ data, onLogout }) {
                     </thead>
                     <tbody>
                         {subjects.map((subject, index) => (
-                            <SubjectRow key={index} subject={subject} />
+                            <SubjectRow key={index} subject={subject} index={index} />
                         ))}
                     </tbody>
                 </table>

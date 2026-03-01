@@ -6,6 +6,7 @@ function App() {
     const [attendanceData, setAttendanceData] = useState(null)
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState(null)
+    const [transitioning, setTransitioning] = useState(false)
 
     const handleLogin = async (username, password) => {
         setLoading(true)
@@ -24,7 +25,11 @@ function App() {
                 throw new Error(result.error || 'Failed to fetch attendance')
             }
 
-            setAttendanceData(result.data)
+            setTransitioning(true)
+            setTimeout(() => {
+                setAttendanceData(result.data)
+                setTransitioning(false)
+            }, 300)
         } catch (err) {
             setError(err.message)
         } finally {
@@ -33,18 +38,29 @@ function App() {
     }
 
     const handleLogout = () => {
-        setAttendanceData(null)
-        setError(null)
+        setTransitioning(true)
+        setTimeout(() => {
+            setAttendanceData(null)
+            setError(null)
+            setTransitioning(false)
+        }, 300)
     }
 
     return (
         <div className="app">
+            {/* Floating background shapes */}
+            <div className="bg-shapes">
+                <div className="bg-shape bg-shape-1" />
+                <div className="bg-shape bg-shape-2" />
+                <div className="bg-shape bg-shape-3" />
+            </div>
+
             <header className="app-header">
                 <h1>CHARUSAT Attendance Manager</h1>
                 <p className="subtitle">Check your attendance & see how many lectures you can skip</p>
             </header>
 
-            <main className="app-main">
+            <main className="app-main" style={{ opacity: transitioning ? 0 : 1, transition: 'opacity 0.3s ease' }}>
                 {!attendanceData ? (
                     <LoginForm
                         onLogin={handleLogin}

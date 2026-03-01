@@ -14,7 +14,6 @@ function LoginForm({ onLogin, loading, error }) {
     return (
         <div className="login-container">
             <div className="login-card">
-                <div className="login-icon">🎓</div>
                 <h2>eGovernance Login</h2>
                 <p className="login-desc">Enter your CHARUSAT eGovernance credentials</p>
 
