@@ -7,8 +7,9 @@ const path = require("path");
 const sharp = require("sharp");
 const tesseract = require("node-tesseract-ocr");
 
-// Allow self-signed/mismatched certs
-const agent = new https.Agent({ rejectUnauthorized: false });
+// Allow self-signed/mismatched certs + enable keep-alive so all requests
+// within a session reuse the same TCP connection (saves TLS handshake per request)
+const agent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
 
 // The :912 port redirects here, so use this directly
 const BASE_URL = "https://support.charusat.edu.in/egov";
@@ -126,9 +127,10 @@ async function solveCaptcha(session) {
             .toFile(tmpProcessed);
 
         // OCR with tesseract — psm 8 = single word, restrict to alphanumeric
+        // oem 0 = legacy engine (faster than LSTM for short, simple captchas)
         const raw = await tesseract.recognize(tmpProcessed, {
             lang: "eng",
-            oem: 1,
+            oem: 0,
             psm: 8,
             tessedit_char_whitelist:
                 "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
@@ -167,7 +169,9 @@ async function login(username, password) {
         const session = createSession();
 
         try {
-            // Step 1: GET login page
+            // Step 1: GET login page — establishes ASP.NET_SessionId cookie
+            // and gives us __VIEWSTATE. Must come before the captcha fetch
+            // because the captcha is server-side bound to this session ID.
             console.log(`  [scraper] Getting login page (attempt ${attempt}/${MAX_CAPTCHA_ATTEMPTS})...`);
             const loginPageRes = await session.get(`${BASE_URL}/`);
             const payloadValues = extractPayloadValues(loginPageRes.data);
@@ -178,7 +182,7 @@ async function login(username, password) {
                 );
             }
 
-            // Step 1b: Fetch and OCR the captcha (same session = same cookies)
+            // Step 1b: Fetch and OCR the captcha (same session = same session cookie)
             const captchaText = await solveCaptcha(session);
             if (!captchaText) {
                 console.log("  [scraper] OCR returned empty string, retrying...");
@@ -186,6 +190,7 @@ async function login(username, password) {
             }
 
             // Step 2: POST login via ASP.NET AJAX
+            // Note: captchaText and payloadValues are both ready at this point
             console.log("  [scraper] Posting credentials...");
             const formData = new URLSearchParams({
                 ScriptManager1: "up1|btnLogin",
