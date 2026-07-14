@@ -1,13 +1,19 @@
 const axios = require("axios");
 const cheerio = require("cheerio");
 const https = require("https");
-const sharp = require("sharp");
-const { createWorker } = require("tesseract.js");
+const { Redis } = require("@upstash/redis");
 const { logAccess } = require("./analytics");
 
 // ===== SCRAPER =====
-const agent = new https.Agent({ rejectUnauthorized: false });
+const agent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
 const BASE_URL = "https://support.charusat.edu.in/egov";
+
+function getRedis() {
+    const url = process.env.UPSTASH_REDIS_REST_URL;
+    const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+    if (!url || !token) return null;
+    return new Redis({ url, token });
+}
 
 function extractPayloadValues(html) {
     const values = {};
@@ -21,8 +27,13 @@ function extractPayloadValues(html) {
     return values;
 }
 
-function createSession() {
-    const cookies = {};
+/**
+ * Restore an axios session from cookies stored in Redis.
+ * The captcha endpoint already fetched the login page and stored
+ * {cookies, payloadValues} under key captcha:<token>.
+ */
+function createSessionFromCookies(cookieMap) {
+    const cookies = { ...cookieMap };
     const session = axios.create({
         httpsAgent: agent,
         maxRedirects: 10,
@@ -49,105 +60,70 @@ function createSession() {
     return session;
 }
 
-async function solveCaptcha(session) {
-    const captchaRes = await session.get(
-        `${BASE_URL}/Captcha.ashx?t=${Date.now()}`,
-        { responseType: "arraybuffer" }
-    );
-    const processedBuf = await sharp(Buffer.from(captchaRes.data))
-        .resize({ width: 480, height: 150, fit: "fill" })
-        .greyscale()
-        .normalise()
-        .threshold(140)
-        .png()
-        .toBuffer();
+/**
+ * Login using a captcha token (from /api/captcha) + the user-supplied captcha text.
+ * Restores the ASP.NET session from Redis so the captcha image and login POST
+ * use the same server-side session.
+ */
+async function login(username, password, captchaToken, captchaText) {
+    const redis = getRedis();
+    if (!redis) throw new Error("Session storage not configured.");
 
-    const worker = await createWorker("eng", 1, { logger: () => {} });
-    try {
-        await worker.setParameters({
-            tessedit_pageseg_mode: "8",
-            tessedit_char_whitelist:
-                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
-        });
-        const { data: { text } } = await worker.recognize(processedBuf);
-        return text.replace(/\s+/g, "").substring(0, 5);
-    } finally {
-        await worker.terminate();
+    // Retrieve and immediately delete the stored session (one-time use)
+    const stored = await redis.getdel(`captcha:${captchaToken}`);
+    if (!stored) {
+        throw new Error("Captcha expired or already used. Please refresh and try again.");
     }
-}
 
-const MAX_CAPTCHA_ATTEMPTS = 3;
+    const { cookies, payloadValues: pv } = typeof stored === "string" ? JSON.parse(stored) : stored;
+    const session = createSessionFromCookies(cookies);
 
-async function login(username, password) {
-    let lastError = null;
+    const form = new URLSearchParams({
+        ScriptManager1: "up1|btnLogin", __EVENTTARGET: "btnLogin", __EVENTARGUMENT: "",
+        __LASTFOCUS: "", __VIEWSTATE: pv.__VIEWSTATE,
+        __VIEWSTATEGENERATOR: pv.__VIEWSTATEGENERATOR || "",
+        __EVENTVALIDATION: pv.__EVENTVALIDATION || "",
+        txtUserName: username, txtPassword: String(password),
+        txtCaptchaInput: captchaText.trim(),
+        hdnGPLevel: "", txtUserID: "", txtName: "", hdnPassword: "",
+        txtAccountType: "", txtEmail: "", hdnPasswordFlg: "-1",
+        hdnAuthorizedPerson: "", hdnUserType: "", __ASYNCPOST: "true",
+    });
 
-    for (let attempt = 1; attempt <= MAX_CAPTCHA_ATTEMPTS; attempt++) {
-        const session = createSession();
+    const loginRes = await session.post(`${BASE_URL}/Home.aspx`, form.toString(), {
+        headers: {
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            Origin: "https://support.charusat.edu.in",
+            Referer: `${BASE_URL}/`, "X-MicrosoftAjax": "Delta=true",
+        },
+    });
+
+    const text = loginRes.data || "";
+
+    if (text.toLowerCase().includes("captcha") && !text.includes("pageRedirect")) {
+        throw new Error("Incorrect captcha. Please try again.");
+    }
+
+    if (text.includes("pageRedirect")) {
+        const m = text.match(/pageRedirect\|\|([^|]+)/);
+        if (m) await session.get(decodeURIComponent(m[1]));
+    }
+
+    const c = session.getCookies();
+    if (!c[".EGovWebApp"] && !c["ASP.NET_SessionId"]) {
         try {
-            const loginPage = await session.get(`${BASE_URL}/`);
-            const pv = extractPayloadValues(loginPage.data);
-            if (!pv.__VIEWSTATE) throw new Error("Failed to reach eGovernance login page.");
+            const t = await session.get(`${BASE_URL}/frmAppSelection.aspx`);
+            if (t.data.includes("lnkLogout") || t.data.includes("Welcome")) return session;
+        } catch (e) { }
 
-            const captchaText = await solveCaptcha(session);
-            if (!captchaText) { lastError = new Error("Captcha OCR returned empty"); continue; }
-
-            const form = new URLSearchParams({
-                ScriptManager1: "up1|btnLogin", __EVENTTARGET: "btnLogin", __EVENTARGUMENT: "",
-                __LASTFOCUS: "", __VIEWSTATE: pv.__VIEWSTATE,
-                __VIEWSTATEGENERATOR: pv.__VIEWSTATEGENERATOR || "",
-                __EVENTVALIDATION: pv.__EVENTVALIDATION || "",
-                txtUserName: username, txtPassword: String(password),
-                txtCaptchaInput: captchaText,
-                hdnGPLevel: "", txtUserID: "", txtName: "", hdnPassword: "",
-                txtAccountType: "", txtEmail: "", hdnPasswordFlg: "-1",
-                hdnAuthorizedPerson: "", hdnUserType: "", __ASYNCPOST: "true",
-            });
-
-            const loginRes = await session.post(`${BASE_URL}/Home.aspx`, form.toString(), {
-                headers: {
-                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-                    Origin: "https://support.charusat.edu.in",
-                    Referer: `${BASE_URL}/`, "X-MicrosoftAjax": "Delta=true",
-                },
-            });
-
-            const text = loginRes.data || "";
-
-            // Captcha rejected — try again with fresh session + new captcha
-            if (text.toLowerCase().includes("captcha") && !text.includes("pageRedirect")) {
-                lastError = new Error("Captcha rejected by server");
-                continue;
-            }
-
-            if (text.includes("pageRedirect")) {
-                const m = text.match(/pageRedirect\|\|([^|]+)/);
-                if (m) await session.get(decodeURIComponent(m[1]));
-            }
-
-            const c = session.getCookies();
-            if (!c[".EGovWebApp"] && !c["ASP.NET_SessionId"]) {
-                try {
-                    const t = await session.get(`${BASE_URL}/frmAppSelection.aspx`);
-                    if (t.data.includes("lnkLogout") || t.data.includes("Welcome")) return session;
-                } catch (e) { }
-
-                const lower = text.toLowerCase();
-                if (lower.includes("invalid") || lower.includes("incorrect")) {
-                    throw new Error("Login failed. Check your credentials.");
-                }
-                lastError = new Error("Login failed. Captcha may have been incorrect.");
-                continue;
-            }
-
-            return session;
-        } catch (err) {
-            if (err.message.includes("Check your credentials") ||
-                err.message.includes("Failed to reach")) throw err;
-            lastError = err;
+        const lower = text.toLowerCase();
+        if (lower.includes("invalid") || lower.includes("incorrect")) {
+            throw new Error("Invalid username or password.");
         }
+        throw new Error("Login failed. Please check your credentials and try again.");
     }
 
-    throw lastError || new Error("Login failed after multiple attempts.");
+    return session;
 }
 
 async function fetchAttendance(session) {
@@ -259,10 +235,11 @@ module.exports = async (req, res) => {
     if (req.method !== "POST") return res.status(405).json({ success: false, error: "Method not allowed" });
 
     try {
-        const { username, password } = req.body || {};
+        const { username, password, captchaToken, captchaText } = req.body || {};
         if (!username || !password) return res.status(400).json({ success: false, error: "Username and password are required." });
+        if (!captchaToken || !captchaText) return res.status(400).json({ success: false, error: "Captcha is required." });
 
-        const session = await login(username, password);
+        const session = await login(username, password, captchaToken, captchaText);
         const raw = await fetchAttendance(session);
         const processed = processAttendance(raw);
 

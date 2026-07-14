@@ -15,6 +15,10 @@
         {
             "src": "api/analytics.js",
             "use": "@vercel/node"
+        },
+        {
+            "src": "api/captcha.js",
+            "use": "@vercel/node"
         }
     ],
     "routes": [
@@ -25,6 +29,10 @@
         {
             "src": "/api/analytics",
             "dest": "/api/analytics.js"
+        },
+        {
+            "src": "/api/captcha",
+            "dest": "/api/captcha.js"
         },
         {
             "handle": "filesystem"

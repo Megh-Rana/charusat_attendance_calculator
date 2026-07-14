@@ -1,14 +1,21 @@
 import { useState } from 'react'
 
-function LoginForm({ onLogin, loading, error }) {
+function LoginForm({ onLogin, loading, error, captcha, onRefreshCaptcha, captchaLoading }) {
     const [username, setUsername] = useState('')
     const [password, setPassword] = useState('')
+    const [captchaText, setCaptchaText] = useState('')
 
     const handleSubmit = (e) => {
         e.preventDefault()
-        if (username && password) {
-            onLogin(username, password)
+        if (username && password && captchaText && captcha?.token) {
+            onLogin(username, password, captcha.token, captchaText)
         }
+    }
+
+    // Clear captcha input whenever a new captcha image arrives
+    const handleRefresh = () => {
+        setCaptchaText('')
+        onRefreshCaptcha()
     }
 
     return (
@@ -19,8 +26,18 @@ function LoginForm({ onLogin, loading, error }) {
 
                 {error && (
                     <div className="error-alert">
-                        <span className="error-icon"></span>
+                        <span className="error-icon">⚠</span>
                         {error}
+                        {error.toLowerCase().includes('captcha') && (
+                            <button
+                                type="button"
+                                className="btn-refresh-inline"
+                                onClick={handleRefresh}
+                                disabled={captchaLoading}
+                            >
+                                Refresh captcha
+                            </button>
+                        )}
                     </div>
                 )}
 
@@ -53,7 +70,51 @@ function LoginForm({ onLogin, loading, error }) {
                         />
                     </div>
 
-                    <button type="submit" className="btn-login" disabled={loading}>
+                    <div className="form-group">
+                        <label>Captcha</label>
+                        <div className="captcha-row">
+                            {captchaLoading ? (
+                                <div className="captcha-placeholder">Loading captcha...</div>
+                            ) : captcha?.image ? (
+                                <img
+                                    src={captcha.image}
+                                    alt="Captcha"
+                                    className="captcha-image"
+                                />
+                            ) : (
+                                <div className="captcha-placeholder captcha-error">
+                                    Failed to load
+                                </div>
+                            )}
+                            <button
+                                type="button"
+                                className="btn-refresh-captcha"
+                                onClick={handleRefresh}
+                                disabled={captchaLoading || loading}
+                                title="Refresh captcha"
+                                aria-label="Refresh captcha"
+                            >
+                                ↻
+                            </button>
+                        </div>
+                        <input
+                            id="captcha"
+                            type="text"
+                            value={captchaText}
+                            onChange={(e) => setCaptchaText(e.target.value)}
+                            placeholder="Type the characters above"
+                            disabled={loading || captchaLoading}
+                            autoComplete="off"
+                            maxLength={6}
+                            required
+                        />
+                    </div>
+
+                    <button
+                        type="submit"
+                        className="btn-login"
+                        disabled={loading || captchaLoading || !captcha?.token}
+                    >
                         {loading ? (
                             <span className="loading-text">
                                 <span className="spinner"></span>
@@ -66,7 +127,7 @@ function LoginForm({ onLogin, loading, error }) {
                 </form>
 
                 <p className="login-note">
-                     Credentials are sent directly to CHARUSAT's servers. Nothing is stored.
+                    🔒 Credentials are sent directly to CHARUSAT's servers. Nothing is stored.
                 </p>
             </div>
         </div>

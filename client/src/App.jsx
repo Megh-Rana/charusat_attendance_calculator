@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import LoginForm from './components/LoginForm'
 import AttendanceDashboard from './components/AttendanceDashboard'
 
@@ -8,7 +8,36 @@ function App() {
     const [error, setError] = useState(null)
     const [transitioning, setTransitioning] = useState(false)
 
-    const handleLogin = async (username, password) => {
+    // Captcha state
+    const [captcha, setCaptcha] = useState(null)       // { token, image }
+    const [captchaLoading, setCaptchaLoading] = useState(false)
+
+    const fetchCaptcha = useCallback(async () => {
+        setCaptchaLoading(true)
+        setCaptcha(null)
+        try {
+            const res = await fetch('/api/captcha')
+            const data = await res.json()
+            if (data.success) {
+                setCaptcha({ token: data.token, image: data.captchaImage })
+            } else {
+                setError(data.error || 'Failed to load captcha. Please refresh.')
+            }
+        } catch {
+            setError('Failed to load captcha. Please refresh the page.')
+        } finally {
+            setCaptchaLoading(false)
+        }
+    }, [])
+
+    // Load captcha as soon as the login form mounts
+    useEffect(() => {
+        if (!attendanceData) {
+            fetchCaptcha()
+        }
+    }, [attendanceData, fetchCaptcha])
+
+    const handleLogin = async (username, password, captchaToken, captchaText) => {
         setLoading(true)
         setError(null)
 
@@ -16,12 +45,16 @@ function App() {
             const response = await fetch('/api/attendance', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username, password }),
+                body: JSON.stringify({ username, password, captchaToken, captchaText }),
             })
 
             const result = await response.json()
 
             if (!result.success) {
+                // If captcha was wrong, auto-refresh it so the user can try again
+                if (result.error?.toLowerCase().includes('captcha')) {
+                    fetchCaptcha()
+                }
                 throw new Error(result.error || 'Failed to fetch attendance')
             }
 
@@ -66,6 +99,9 @@ function App() {
                         onLogin={handleLogin}
                         loading={loading}
                         error={error}
+                        captcha={captcha}
+                        captchaLoading={captchaLoading}
+                        onRefreshCaptcha={fetchCaptcha}
                     />
                 ) : (
                     <AttendanceDashboard
