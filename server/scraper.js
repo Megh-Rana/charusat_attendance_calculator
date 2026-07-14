@@ -1,11 +1,8 @@
 const axios = require("axios");
 const cheerio = require("cheerio");
 const https = require("https");
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
 const sharp = require("sharp");
-const tesseract = require("node-tesseract-ocr");
+const { createWorker } = require("tesseract.js");
 
 // Allow self-signed/mismatched certs + enable keep-alive so all requests
 // within a session reuse the same TCP connection (saves TLS handshake per request)
@@ -102,49 +99,45 @@ function createSession() {
 
 /**
  * Fetch the captcha image using the session (so cookies match), preprocess
- * it with sharp for better OCR accuracy, then run tesseract.
+ * it with sharp for better OCR accuracy, then run tesseract.js (WASM —
+ * no system tesseract binary required, works on Vercel/serverless).
  * Returns the cleaned captcha string (max 5 alphanumeric chars).
  */
 async function solveCaptcha(session) {
-    const tmpInput = path.join(os.tmpdir(), `captcha_in_${Date.now()}.png`);
-    const tmpProcessed = path.join(os.tmpdir(), `captcha_out_${Date.now()}.png`);
+    // Fetch captcha image with the same session cookies
+    const captchaRes = await session.get(
+        `${BASE_URL}/Captcha.ashx?t=${Date.now()}`,
+        { responseType: "arraybuffer" }
+    );
 
+    // Preprocess: scale up 3x, greyscale, increase contrast, threshold to B&W
+    // Returns a Buffer directly — no temp files needed with tesseract.js
+    const processedBuf = await sharp(Buffer.from(captchaRes.data))
+        .resize({ width: 480, height: 150, fit: "fill" })
+        .greyscale()
+        .normalise()
+        .threshold(140)
+        .png()
+        .toBuffer();
+
+    // tesseract.js runs entirely in WASM — no system binary dependency
+    const worker = await createWorker("eng", 1, {
+        // Suppress verbose tesseract.js progress logs
+        logger: () => {},
+    });
     try {
-        // Fetch captcha image with the same session cookies
-        const captchaRes = await session.get(
-            `${BASE_URL}/Captcha.ashx?t=${Date.now()}`,
-            { responseType: "arraybuffer" }
-        );
-
-        // Preprocess: scale up 3x, greyscale, increase contrast, threshold to B&W
-        // This dramatically improves tesseract accuracy on small noisy captchas
-        await sharp(Buffer.from(captchaRes.data))
-            .resize({ width: 480, height: 150, fit: "fill" })
-            .greyscale()
-            .normalise()
-            .threshold(140)
-            .png()
-            .toFile(tmpProcessed);
-
-        // OCR with tesseract — psm 8 = single word, restrict to alphanumeric
-        // oem 0 = legacy engine (faster than LSTM for short, simple captchas)
-        const raw = await tesseract.recognize(tmpProcessed, {
-            lang: "eng",
-            oem: 0,
-            psm: 8,
+        await worker.setParameters({
+            tessedit_pageseg_mode: "8",   // single word
             tessedit_char_whitelist:
                 "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
         });
 
-        // Clean: strip whitespace/newlines, take first 5 chars
-        const cleaned = raw.replace(/\s+/g, "").substring(0, 5);
+        const { data: { text } } = await worker.recognize(processedBuf);
+        const cleaned = text.replace(/\s+/g, "").substring(0, 5);
         console.log(`  [scraper] Captcha OCR result: "${cleaned}"`);
         return cleaned;
     } finally {
-        // Clean up temp files
-        for (const f of [tmpInput, tmpProcessed]) {
-            try { fs.unlinkSync(f); } catch (_) {}
-        }
+        await worker.terminate();
     }
 }
 
