@@ -1,6 +1,8 @@
 const axios = require("axios");
 const cheerio = require("cheerio");
 const https = require("https");
+const sharp = require("sharp");
+const { createWorker } = require("tesseract.js");
 const { logAccess } = require("./analytics");
 
 // ===== SCRAPER =====
@@ -47,46 +49,105 @@ function createSession() {
     return session;
 }
 
+async function solveCaptcha(session) {
+    const captchaRes = await session.get(
+        `${BASE_URL}/Captcha.ashx?t=${Date.now()}`,
+        { responseType: "arraybuffer" }
+    );
+    const processedBuf = await sharp(Buffer.from(captchaRes.data))
+        .resize({ width: 480, height: 150, fit: "fill" })
+        .greyscale()
+        .normalise()
+        .threshold(140)
+        .png()
+        .toBuffer();
+
+    const worker = await createWorker("eng", 1, { logger: () => {} });
+    try {
+        await worker.setParameters({
+            tessedit_pageseg_mode: "8",
+            tessedit_char_whitelist:
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+        });
+        const { data: { text } } = await worker.recognize(processedBuf);
+        return text.replace(/\s+/g, "").substring(0, 5);
+    } finally {
+        await worker.terminate();
+    }
+}
+
+const MAX_CAPTCHA_ATTEMPTS = 3;
+
 async function login(username, password) {
-    const session = createSession();
-    const loginPage = await session.get(`${BASE_URL}/`);
-    const pv = extractPayloadValues(loginPage.data);
-    if (!pv.__VIEWSTATE) throw new Error("Failed to reach eGovernance login page.");
+    let lastError = null;
 
-    const form = new URLSearchParams({
-        ScriptManager1: "up1|btnLogin", __EVENTTARGET: "btnLogin", __EVENTARGUMENT: "",
-        __LASTFOCUS: "", __VIEWSTATE: pv.__VIEWSTATE,
-        __VIEWSTATEGENERATOR: pv.__VIEWSTATEGENERATOR || "",
-        __EVENTVALIDATION: pv.__EVENTVALIDATION || "",
-        txtUserName: username, txtPassword: String(password),
-        hdnGPLevel: "", txtUserID: "", txtName: "", hdnPassword: "",
-        txtAccountType: "", txtEmail: "", hdnPasswordFlg: "-1",
-        hdnAuthorizedPerson: "", hdnUserType: "", __ASYNCPOST: "true",
-    });
-
-    const loginRes = await session.post(`${BASE_URL}/Home.aspx`, form.toString(), {
-        headers: {
-            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-            Origin: "https://support.charusat.edu.in",
-            Referer: `${BASE_URL}/`, "X-MicrosoftAjax": "Delta=true",
-        },
-    });
-
-    const text = loginRes.data || "";
-    if (text.includes("pageRedirect")) {
-        const m = text.match(/pageRedirect\|\|([^|]+)/);
-        if (m) await session.get(decodeURIComponent(m[1]));
-    }
-
-    const c = session.getCookies();
-    if (!c[".EGovWebApp"] && !c["ASP.NET_SessionId"]) {
+    for (let attempt = 1; attempt <= MAX_CAPTCHA_ATTEMPTS; attempt++) {
+        const session = createSession();
         try {
-            const t = await session.get(`${BASE_URL}/frmAppSelection.aspx`);
-            if (t.data.includes("lnkLogout") || t.data.includes("Welcome")) return session;
-        } catch (e) { }
-        throw new Error("Login failed. Check your credentials.");
+            const loginPage = await session.get(`${BASE_URL}/`);
+            const pv = extractPayloadValues(loginPage.data);
+            if (!pv.__VIEWSTATE) throw new Error("Failed to reach eGovernance login page.");
+
+            const captchaText = await solveCaptcha(session);
+            if (!captchaText) { lastError = new Error("Captcha OCR returned empty"); continue; }
+
+            const form = new URLSearchParams({
+                ScriptManager1: "up1|btnLogin", __EVENTTARGET: "btnLogin", __EVENTARGUMENT: "",
+                __LASTFOCUS: "", __VIEWSTATE: pv.__VIEWSTATE,
+                __VIEWSTATEGENERATOR: pv.__VIEWSTATEGENERATOR || "",
+                __EVENTVALIDATION: pv.__EVENTVALIDATION || "",
+                txtUserName: username, txtPassword: String(password),
+                txtCaptchaInput: captchaText,
+                hdnGPLevel: "", txtUserID: "", txtName: "", hdnPassword: "",
+                txtAccountType: "", txtEmail: "", hdnPasswordFlg: "-1",
+                hdnAuthorizedPerson: "", hdnUserType: "", __ASYNCPOST: "true",
+            });
+
+            const loginRes = await session.post(`${BASE_URL}/Home.aspx`, form.toString(), {
+                headers: {
+                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                    Origin: "https://support.charusat.edu.in",
+                    Referer: `${BASE_URL}/`, "X-MicrosoftAjax": "Delta=true",
+                },
+            });
+
+            const text = loginRes.data || "";
+
+            // Captcha rejected — try again with fresh session + new captcha
+            if (text.toLowerCase().includes("captcha") && !text.includes("pageRedirect")) {
+                lastError = new Error("Captcha rejected by server");
+                continue;
+            }
+
+            if (text.includes("pageRedirect")) {
+                const m = text.match(/pageRedirect\|\|([^|]+)/);
+                if (m) await session.get(decodeURIComponent(m[1]));
+            }
+
+            const c = session.getCookies();
+            if (!c[".EGovWebApp"] && !c["ASP.NET_SessionId"]) {
+                try {
+                    const t = await session.get(`${BASE_URL}/frmAppSelection.aspx`);
+                    if (t.data.includes("lnkLogout") || t.data.includes("Welcome")) return session;
+                } catch (e) { }
+
+                const lower = text.toLowerCase();
+                if (lower.includes("invalid") || lower.includes("incorrect")) {
+                    throw new Error("Login failed. Check your credentials.");
+                }
+                lastError = new Error("Login failed. Captcha may have been incorrect.");
+                continue;
+            }
+
+            return session;
+        } catch (err) {
+            if (err.message.includes("Check your credentials") ||
+                err.message.includes("Failed to reach")) throw err;
+            lastError = err;
+        }
     }
-    return session;
+
+    throw lastError || new Error("Login failed after multiple attempts.");
 }
 
 async function fetchAttendance(session) {

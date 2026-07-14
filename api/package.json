@@ -1,7 +1,9 @@
 {
     "dependencies": {
+        "@upstash/redis": "^1.34.0",
         "axios": "^1.7.0",
         "cheerio": "^1.0.0",
-        "@upstash/redis": "^1.34.0"
+        "sharp": "^0.33.5",
+        "tesseract.js": "^5.1.1"
     }
 }
