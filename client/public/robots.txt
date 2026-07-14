@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://charusat-attendance-calculator.vercel.app/sitemap.xml
