@@ -1,6 +1,11 @@
 const axios = require("axios");
 const cheerio = require("cheerio");
 const https = require("https");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const sharp = require("sharp");
+const tesseract = require("node-tesseract-ocr");
 
 // Allow self-signed/mismatched certs
 const agent = new https.Agent({ rejectUnauthorized: false });
@@ -95,107 +100,203 @@ function createSession() {
 }
 
 /**
+ * Fetch the captcha image using the session (so cookies match), preprocess
+ * it with sharp for better OCR accuracy, then run tesseract.
+ * Returns the cleaned captcha string (max 5 alphanumeric chars).
+ */
+async function solveCaptcha(session) {
+    const tmpInput = path.join(os.tmpdir(), `captcha_in_${Date.now()}.png`);
+    const tmpProcessed = path.join(os.tmpdir(), `captcha_out_${Date.now()}.png`);
+
+    try {
+        // Fetch captcha image with the same session cookies
+        const captchaRes = await session.get(
+            `${BASE_URL}/Captcha.ashx?t=${Date.now()}`,
+            { responseType: "arraybuffer" }
+        );
+
+        // Preprocess: scale up 3x, greyscale, increase contrast, threshold to B&W
+        // This dramatically improves tesseract accuracy on small noisy captchas
+        await sharp(Buffer.from(captchaRes.data))
+            .resize({ width: 480, height: 150, fit: "fill" })
+            .greyscale()
+            .normalise()
+            .threshold(140)
+            .png()
+            .toFile(tmpProcessed);
+
+        // OCR with tesseract — psm 8 = single word, restrict to alphanumeric
+        const raw = await tesseract.recognize(tmpProcessed, {
+            lang: "eng",
+            oem: 1,
+            psm: 8,
+            tessedit_char_whitelist:
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+        });
+
+        // Clean: strip whitespace/newlines, take first 5 chars
+        const cleaned = raw.replace(/\s+/g, "").substring(0, 5);
+        console.log(`  [scraper] Captcha OCR result: "${cleaned}"`);
+        return cleaned;
+    } finally {
+        // Clean up temp files
+        for (const f of [tmpInput, tmpProcessed]) {
+            try { fs.unlinkSync(f); } catch (_) {}
+        }
+    }
+}
+
+/**
  * Login to eGovernance
  * The flow:
- *   1. GET the login page → extract __VIEWSTATE
- *   2. POST credentials via ASP.NET AJAX → get pageRedirect URL
+ *   1. GET the login page → extract __VIEWSTATE + fetch & OCR the captcha
+ *   2. POST credentials + captcha via ASP.NET AJAX → get pageRedirect URL
  *   3. Follow the redirect → session cookies are now set
+ *
+ * Retries up to MAX_CAPTCHA_ATTEMPTS times since OCR isn't always perfect.
+ * Each retry fetches a fresh captcha (new session GET) to get a new image.
  */
+const MAX_CAPTCHA_ATTEMPTS = 3;
+
 async function login(username, password) {
-    const session = createSession();
+    let lastError = null;
 
-    // Step 1: GET login page
-    console.log("  [scraper] Getting login page...");
-    const loginPageRes = await session.get(`${BASE_URL}/`);
-    const payloadValues = extractPayloadValues(loginPageRes.data);
+    for (let attempt = 1; attempt <= MAX_CAPTCHA_ATTEMPTS; attempt++) {
+        // Each attempt needs a fresh session so the captcha image and
+        // ASP.NET hidden fields are in sync with each other
+        const session = createSession();
 
-    if (!payloadValues.__VIEWSTATE) {
-        throw new Error(
-            "Failed to extract __VIEWSTATE from login page. The site may be down."
-        );
-    }
-
-    // Step 2: POST login via ASP.NET AJAX
-    console.log("  [scraper] Posting credentials...");
-    const formData = new URLSearchParams({
-        ScriptManager1: "up1|btnLogin",
-        __EVENTTARGET: "btnLogin",
-        __EVENTARGUMENT: "",
-        __LASTFOCUS: "",
-        __VIEWSTATE: payloadValues.__VIEWSTATE,
-        __VIEWSTATEGENERATOR: payloadValues.__VIEWSTATEGENERATOR || "",
-        __EVENTVALIDATION: payloadValues.__EVENTVALIDATION || "",
-        txtUserName: username,
-        txtPassword: String(password),
-        hdnGPLevel: "",
-        txtUserID: "",
-        txtName: "",
-        hdnPassword: "",
-        txtAccountType: "",
-        txtEmail: "",
-        hdnPasswordFlg: "-1",
-        hdnAuthorizedPerson: "",
-        hdnUserType: "",
-        __ASYNCPOST: "true",
-    });
-
-    const loginRes = await session.post(
-        `${BASE_URL}/Home.aspx`,
-        formData.toString(),
-        {
-            headers: {
-                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-                Origin: "https://support.charusat.edu.in",
-                Referer: `${BASE_URL}/`,
-                "X-MicrosoftAjax": "Delta=true",
-            },
-        }
-    );
-
-    // The response body contains an ASP.NET AJAX delta response
-    // On success: contains "pageRedirect||<url>"
-    // On failure: contains error message or no redirect
-    const responseText = loginRes.data || "";
-
-    if (responseText.includes("pageRedirect")) {
-        // Extract redirect URL
-        const redirectMatch = responseText.match(/pageRedirect\|\|([^|]+)/);
-        if (redirectMatch) {
-            const redirectUrl = decodeURIComponent(redirectMatch[1]);
-            console.log(`  [scraper] Following redirect: ${redirectUrl}`);
-
-            // Step 3: Follow the redirect — this sets the actual auth cookies
-            await session.get(redirectUrl);
-        }
-    }
-
-    // Verify we have the necessary cookies
-    const sessionCookies = session.getCookies();
-    const hasAuth =
-        sessionCookies[".EGovWebApp"] || sessionCookies["ASP.NET_SessionId"];
-
-    if (!hasAuth) {
-        // Check if we can access the dashboard anyway (maybe cookies were set differently)
         try {
-            const testRes = await session.get(`${BASE_URL}/frmAppSelection.aspx`);
-            if (
-                testRes.data.includes("lnkLogout") ||
-                testRes.data.includes("Welcome")
-            ) {
-                console.log("  [scraper] Auth confirmed via page content.");
-                return session;
-            }
-        } catch (e) {
-            // fall through
-        }
+            // Step 1: GET login page
+            console.log(`  [scraper] Getting login page (attempt ${attempt}/${MAX_CAPTCHA_ATTEMPTS})...`);
+            const loginPageRes = await session.get(`${BASE_URL}/`);
+            const payloadValues = extractPayloadValues(loginPageRes.data);
 
-        throw new Error(
-            "Login failed. Could not obtain session cookies. Check credentials."
-        );
+            if (!payloadValues.__VIEWSTATE) {
+                throw new Error(
+                    "Failed to extract __VIEWSTATE from login page. The site may be down."
+                );
+            }
+
+            // Step 1b: Fetch and OCR the captcha (same session = same cookies)
+            const captchaText = await solveCaptcha(session);
+            if (!captchaText) {
+                console.log("  [scraper] OCR returned empty string, retrying...");
+                continue;
+            }
+
+            // Step 2: POST login via ASP.NET AJAX
+            console.log("  [scraper] Posting credentials...");
+            const formData = new URLSearchParams({
+                ScriptManager1: "up1|btnLogin",
+                __EVENTTARGET: "btnLogin",
+                __EVENTARGUMENT: "",
+                __LASTFOCUS: "",
+                __VIEWSTATE: payloadValues.__VIEWSTATE,
+                __VIEWSTATEGENERATOR: payloadValues.__VIEWSTATEGENERATOR || "",
+                __EVENTVALIDATION: payloadValues.__EVENTVALIDATION || "",
+                txtUserName: username,
+                txtPassword: String(password),
+                txtCaptchaInput: captchaText,
+                hdnGPLevel: "",
+                txtUserID: "",
+                txtName: "",
+                hdnPassword: "",
+                txtAccountType: "",
+                txtEmail: "",
+                hdnPasswordFlg: "-1",
+                hdnAuthorizedPerson: "",
+                hdnUserType: "",
+                __ASYNCPOST: "true",
+            });
+
+            const loginRes = await session.post(
+                `${BASE_URL}/Home.aspx`,
+                formData.toString(),
+                {
+                    headers: {
+                        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                        Origin: "https://support.charusat.edu.in",
+                        Referer: `${BASE_URL}/`,
+                        "X-MicrosoftAjax": "Delta=true",
+                    },
+                }
+            );
+
+            // The response body contains an ASP.NET AJAX delta response
+            // On success: contains "pageRedirect||<url>"
+            // On captcha failure: typically contains an error alert or no redirect
+            // On wrong password: also no redirect
+            const responseText = loginRes.data || "";
+
+            // If the server says captcha is wrong, retry with a fresh one
+            if (
+                responseText.toLowerCase().includes("captcha") &&
+                !responseText.includes("pageRedirect")
+            ) {
+                console.log(`  [scraper] Captcha rejected (attempt ${attempt}), retrying...`);
+                lastError = new Error("Captcha rejected by server");
+                continue;
+            }
+
+            if (responseText.includes("pageRedirect")) {
+                const redirectMatch = responseText.match(/pageRedirect\|\|([^|]+)/);
+                if (redirectMatch) {
+                    const redirectUrl = decodeURIComponent(redirectMatch[1]);
+                    console.log(`  [scraper] Following redirect: ${redirectUrl}`);
+
+                    // Step 3: Follow the redirect — this sets the actual auth cookies
+                    await session.get(redirectUrl);
+                }
+            }
+
+            // Verify we have the necessary cookies
+            const sessionCookies = session.getCookies();
+            const hasAuth =
+                sessionCookies[".EGovWebApp"] || sessionCookies["ASP.NET_SessionId"];
+
+            if (!hasAuth) {
+                // Check if we can access the dashboard anyway (maybe cookies were set differently)
+                try {
+                    const testRes = await session.get(`${BASE_URL}/frmAppSelection.aspx`);
+                    if (
+                        testRes.data.includes("lnkLogout") ||
+                        testRes.data.includes("Welcome")
+                    ) {
+                        console.log("  [scraper] Auth confirmed via page content.");
+                        return session;
+                    }
+                } catch (e) {
+                    // fall through
+                }
+
+                // No redirect + no auth cookies = wrong password or captcha still wrong
+                const lowerResponse = responseText.toLowerCase();
+                if (lowerResponse.includes("invalid") || lowerResponse.includes("incorrect")) {
+                    throw new Error("Login failed. Invalid username or password.");
+                }
+
+                lastError = new Error(
+                    "Login failed. Could not obtain session cookies. Captcha may have been incorrect."
+                );
+                continue;
+            }
+
+            console.log("  [scraper] Auth cookies obtained.");
+            return session;
+
+        } catch (err) {
+            // Re-throw immediately if it's a credential error (no point retrying)
+            if (err.message.includes("Invalid username or password") ||
+                err.message.includes("site may be down")) {
+                throw err;
+            }
+            lastError = err;
+            console.log(`  [scraper] Attempt ${attempt} failed: ${err.message}`);
+        }
     }
 
-    console.log("  [scraper] Auth cookies obtained.");
-    return session;
+    throw lastError || new Error(`Login failed after ${MAX_CAPTCHA_ATTEMPTS} captcha attempts.`);
 }
 
 /**
